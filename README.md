@@ -11,7 +11,7 @@ Python version: 3.11.5
 
 This toolbox contains demo for the following papers:
 
-Meng Y, Huang Y, Fan Y, Li Y, Zhou Y, Chen L*. RECENet: A Dual-stream Contrast-aware Attention Network With Bidirectional Pyramid Consistency for CEST Image Registration.
+Meng Y, Chen L*. RECENet: A Dual-stream Contrast-aware Attention Network With Bidirectional Pyramid Consistency for CEST Image Registration.
 
 Additionally, supplementary videos are provided to visually demonstrate the registration results. The initial values and boundary conditions for the fitting are also provided in supplementary. 
 
