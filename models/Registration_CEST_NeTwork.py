@@ -22,7 +22,7 @@ import numpy as np
 from torch.distributions.normal import Normal
 import utils
 import math
-
+import scipy.io as sio
 
 class ChannelAttention(nn.Module):
     def __init__(self, channel, ratio=8):
@@ -47,12 +47,14 @@ class SpatialAttention(nn.Module):
         super(SpatialAttention, self).__init__()
         self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=kernel_size//2, bias=False)
         self.sigmoid = nn.Sigmoid()
+        self.relu = nn.ReLU()
 
     def forward(self, x):
         avg_pooled = torch.mean(x, dim=1, keepdim=True)
         max_pooled, _ = torch.max(x, dim=1, keepdim=True)
         y = torch.cat([avg_pooled, max_pooled], dim=1)
         y = self.conv1(y)
+        y_map = self.relu(y)
         return x * self.sigmoid(y)
 
 
@@ -307,8 +309,6 @@ class Encoder(nn.Module):
 
         return [out0, out1, out2, out3]
 
-
-
 class CConv(nn.Module):
     def __init__(self, channel):
         super(CConv, self).__init__()
@@ -359,7 +359,7 @@ class Conv2dReLU(nn.Sequential):  # 调用父类，桉顺序添加到’Sequenti
             nm = nn.BatchNorm2d(out_channels)
 
         super(Conv2dReLU, self).__init__(conv, nm, relu)
-
+import matplotlib.pyplot as plt
 class feature_fusion_module(nn.Module):
     def __init__(self, in_channels, inter_channels=None):
         super(feature_fusion_module, self).__init__()
@@ -381,19 +381,12 @@ class feature_fusion_module(nn.Module):
         # fused_features = torch.cat([theta_x, weighted_phi], dim=1)
         return fused_features
 
-class sequential_pyramid_net(nn.Module):
-    def __init__(self, inshape, flow_multiplier=1., in_channel=1, channels=16):
-        super(sequential_pyramid_net, self).__init__()
-        self.flow_multiplier = flow_multiplier
-        self.channels = channels
-        self.step = 7
-        self.inshape = inshape
 
+class decoder(nn.Module):
+    def __init__(self, inshape):
+        super(decoder, self).__init__()
+        self.channels = 16
         c = self.channels  # c = 16
-
-        self.encoder_moving = Encoder(in_channel=in_channel, first_out_channel=c)
-        self.encoder_fixed = Encoder(in_channel=in_channel, first_out_channel=c)
-
         self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
         self.upsample_trilin = nn.Upsample(scale_factor=2, mode='bilinear',
                                            align_corners=True)
@@ -411,7 +404,7 @@ class sequential_pyramid_net(nn.Module):
             self.diff_INVERSE.append(VecInt([s // 2 ** i for s in inshape]))
 
         self.cconv_4 = nn.Sequential(
-            ConvInsBlock(16 * c+32, 8 * c, 3, 1),
+            ConvInsBlock(16 * c + 32, 8 * c, 3, 1),
             ConvInsBlock(8 * c, 8 * c, 3, 1)
         )
         # warp scale 2
@@ -419,38 +412,125 @@ class sequential_pyramid_net(nn.Module):
         self.defconv4.weight = nn.Parameter(Normal(0, 1e-5).sample(self.defconv4.weight.shape))
         self.defconv4.bias = nn.Parameter(torch.zeros(self.defconv4.bias.shape))
         self.dconv4 = nn.Sequential(
-            ConvInsBlock(3 * 8 * c+32, 8 * c),
+            ConvInsBlock(3 * 8 * c + 32, 8 * c),
             ConvInsBlock(8 * c, 8 * c)
         )
 
         self.upconv3 = UpConvBlock(8 * c, 4 * c, 4, 2)
-        self.cconv_3 = CConv(3 * 4 * c+32)
+        self.cconv_3 = CConv(3 * 4 * c + 32)
 
         # warp scale 1
-        self.defconv3 = nn.Conv2d(3 * 4 * c+32, 2, 3, 1, 1)
+        self.defconv3 = nn.Conv2d(3 * 4 * c + 32, 2, 3, 1, 1)
         self.defconv3.weight = nn.Parameter(Normal(0, 1e-5).sample(self.defconv3.weight.shape))
         self.defconv3.bias = nn.Parameter(torch.zeros(self.defconv3.bias.shape))
-        self.dconv3 = ConvInsBlock(3 * 4 * c+32, 4 * c)
+        self.dconv3 = ConvInsBlock(3 * 4 * c + 32, 4 * c)
 
-        self.upconv2 = UpConvBlock(3 * 4 * c+32, 2 * c, 4, 2)
-        self.cconv_2 = CConv(3 * 2 * c+32)
+        self.upconv2 = UpConvBlock(3 * 4 * c + 32, 2 * c, 4, 2)
+        self.cconv_2 = CConv(3 * 2 * c + 32)
 
         # warp scale 0
-        self.defconv2 = nn.Conv2d(3 * 2 * c+32, 2, 3, 1, 1)
+        self.defconv2 = nn.Conv2d(3 * 2 * c + 32, 2, 3, 1, 1)
         self.defconv2.weight = nn.Parameter(Normal(0, 1e-5).sample(self.defconv2.weight.shape))
         self.defconv2.bias = nn.Parameter(torch.zeros(self.defconv2.bias.shape))
-        self.dconv2 = ConvInsBlock(3 * 2 * c+32, 2 * c)
+        self.dconv2 = ConvInsBlock(3 * 2 * c + 32, 2 * c)
 
-        self.upconv1 = UpConvBlock(3 * 2 * c+32, c, 4, 2)
+        self.upconv1 = UpConvBlock(3 * 2 * c + 32, c, 4, 2)
         self.cconv_1 = CConv(3 * c)
 
         # decoder layers
         self.defconv1 = nn.Conv2d(3 * c, 2, 3, 1, 1)
         self.defconv1.weight = nn.Parameter(Normal(0, 1e-5).sample(self.defconv1.weight.shape))
-        self.defconv1.bias = nn.Parameter(torch.zeros(self.defconv1.bias.shape))
+        self.defconv1.bias = nn.Parameter(torch.zeros(self.defconv1.bias.shape)
+                                           )
+    def forward(self, F4, M4, F3, M3, F2, M2, F1, M1):
+        # first dec layer- after equalization
+        C4 = torch.cat([F4, M4], dim=1)
+        C4 = self.cconv_4(C4)
+        flow = self.defconv4(C4)
+        flow = self.diff[3](flow)
+        warped = self.warp[3](M4, flow)
+        C4 = self.dconv4(torch.cat([F4, warped, C4], dim=1))
+        v = self.defconv4(C4)
+        w = self.diff[3](v)
+        flow_0 = flow  # 1/8
+
+        # second dec layer
+        D3 = self.upconv3(C4)
+        flow = self.upsample_trilin(2 * (self.warp[3](flow, w) + w))
+        warped = self.warp[2](M3, flow)
+        C3 = self.cconv_3(F3, warped, D3)
+        v = self.defconv3(C3)
+        w = self.diff[2](v)
+
+        flow = self.warp[2](flow, w) + w  # 32,32
+        warped = self.warp[2](M3, flow)
+        D3 = self.dconv3(C3)
+        C3 = self.cconv_3(F3, warped, D3)
+        v = self.defconv3(C3)
+        w = self.diff[2](v)
+
+        flow_1 = flow  # 1/4
+
+        # third dec layer
+        D2 = self.upconv2(C3)
+        flow = self.upsample_trilin(2 * (self.warp[2](flow, w) + w))  # 64,64
+        warped = self.warp[1](M2, flow)
+        C2 = self.cconv_2(F2, warped, D2)
+        v = self.defconv2(C2)
+        w = self.diff[1](v)
+        flow = self.warp[1](flow, w) + w
+        warped = self.warp[1](M2, flow)
+        D2 = self.dconv2(C2)
+        C2 = self.cconv_2(F2, warped, D2)
+        v = self.defconv2(C2)
+        w = self.diff[1](v)
+        flow = self.warp[1](flow, w) + w
+        warped = self.warp[1](M2, flow)
+        D2 = self.dconv2(C2)
+        C2 = self.cconv_2(F2, warped, D2)
+        v = self.defconv2(C2)
+        w = self.diff[1](v)
+
+        flow_2 = flow  # 1/2
+
+        D1 = self.upconv1(C2)
+        flow = self.upsample_trilin(2 * (self.warp[1](flow, w) + w))
+        warped = self.warp[0](M1, flow)
+        C1 = self.cconv_1(F1, warped, D1)
+        v = self.defconv1(C1)
+        w = self.diff[0](v)
+        flow = self.warp[0](flow, w) + w  # 1
+
+        return flow_0, flow_1, flow_2, flow
+
+class sequential_pyramid_net(nn.Module):
+    def __init__(self, inshape, flow_multiplier=1., in_channel=1, channels=16):
+        super(sequential_pyramid_net, self).__init__()
+        self.flow_multiplier = flow_multiplier
+        self.channels = channels
+        self.step = 7
+        self.inshape = inshape
+
+        c = self.channels  # c = 16
+
+        self.encoder_moving = Encoder(in_channel=in_channel, first_out_channel=c)
+        self.encoder_fixed = Encoder(in_channel=in_channel, first_out_channel=c)
+        self.decoder = decoder(inshape)
         self.resize_1 = utils.ResizeTransform(2, len(inshape))
         self.resize_2 = utils.ResizeTransform(4, len(inshape))
         self.resize_3 = utils.ResizeTransform(8, len(inshape))
+
+        self.warp = nn.ModuleList()
+        self.diff = nn.ModuleList()
+        for i in range(4):
+            self.warp.append(SpatialTransformer([s // 2 ** i for s in inshape]))
+            self.diff.append(VecInt([s // 2 ** i for s in inshape]))
+
+        self.warp_INVERSE = nn.ModuleList()
+        self.diff_INVERSE = nn.ModuleList()
+        for i in range(4):
+            self.warp_INVERSE.append(SpatialTransformer([s // 2 ** i for s in inshape]))
+            self.diff_INVERSE.append(VecInt([s // 2 ** i for s in inshape]))
 
         # 初始化注意力模块
         self.channel_attention_module_1 = ChannelAttention(channel=16)
@@ -476,15 +556,18 @@ class sequential_pyramid_net(nn.Module):
         # #
         M2 = self.spatial_attention_module(M2)
         M2 = self.channel_attention_module_2(M2)
+
         # #
         F2 = self.spatial_attention_module(F2)
         F2 = self.channel_attention_module_2(F2)
+
         # #
         M3 = self.spatial_attention_module(M3)
         M3 = self.channel_attention_module_3(M3)
         # #
         F3 = self.spatial_attention_module(F3)
         F3 = self.channel_attention_module_3(F3)
+
         # #
         M4 = self.spatial_attention_module(M4)
         M4 = self.channel_attention_module_4(M4)
@@ -492,102 +575,25 @@ class sequential_pyramid_net(nn.Module):
         F4 = self.spatial_attention_module(F4)
         F4 = self.channel_attention_module_4(F4)
 
-
         M4 = self.path1_block3_NLCross(M4, F4)
         F4 = self.path2_block3_NLCross(F4, M4)
 
+        flow_0_forward, flow_1_forward, flow_2_forward, flow_forward = self.decoder(F4, M4, F3, M3, F2, M2, F1, M1)
+        flow_0_backward, flow_1_backward, flow_2_backward, flow_backward = self.decoder(M4, F4, M3, F3, M2, F2, M1, F1)
+        flow_forward = (flow_forward - flow_backward) / 2
+        flow_backward = (flow_backward - flow_forward) / 2
+        y_moved = self.warp[0](moving, flow_forward)
+        x_moved = self.warp[0](fixed, flow_backward)
+        return (y_moved,flow_0_forward, flow_1_forward, flow_2_forward, flow_forward,
+                x_moved, flow_0_backward, flow_1_backward, flow_2_backward, flow_backward)
 
-        # first dec layer- after equalization
-        C4 = torch.cat([F4, M4], dim=1)
-        C4 = self.cconv_4(C4)
-        flow = self.defconv4(C4)
-        flow = self.diff[3](flow)
-        warped = self.warp[3](M4, flow)
-        C4 = self.dconv4(torch.cat([F4, warped, C4], dim=1))
-        v = self.defconv4(C4)
-        w = self.diff[3](v)
-        flow_0 = flow  #1/8
-
-
-
-        # second dec layer
-        D3 = self.upconv3(C4)
-        flow = self.upsample_trilin(2 * (self.warp[3](flow, w) + w))
-        warped = self.warp[2](M3, flow)
-        C3 = self.cconv_3(F3, warped, D3)
-        v = self.defconv3(C3)
-        w = self.diff[2](v)
-
-        flow = self.warp[2](flow, w) + w  # 32,32
-        warped = self.warp[2](M3, flow)
-        D3 = self.dconv3(C3)
-        C3 = self.cconv_3(F3, warped, D3)
-        v = self.defconv3(C3)
-        w = self.diff[2](v)
-
-        flow_1 = flow  #1/4
-
-        # third dec layer
-        D2 = self.upconv2(C3)
-        flow = self.upsample_trilin(2 * (self.warp[2](flow, w) + w))  # 64,64
-        warped = self.warp[1](M2, flow)
-        C2 = self.cconv_2(F2, warped, D2)
-        v = self.defconv2(C2)
-        w = self.diff[1](v)
-        flow = self.warp[1](flow, w) + w
-        warped = self.warp[1](M2, flow)
-        D2 = self.dconv2(C2)
-        C2 = self.cconv_2(F2, warped, D2)
-        v = self.defconv2(C2)
-        w = self.diff[1](v)
-        flow = self.warp[1](flow, w) + w
-        warped = self.warp[1](M2, flow)
-        D2 = self.dconv2(C2)
-        C2 = self.cconv_2(F2, warped, D2)
-        v = self.defconv2(C2)
-        w = self.diff[1](v)
-
-        flow_2 = flow  #1/2
-
-        D1 = self.upconv1(C2)
-        flow = self.upsample_trilin(2 * (self.warp[1](flow, w) + w))
-        warped = self.warp[0](M1, flow)
-        C1 = self.cconv_1(F1, warped, D1)
-        v = self.defconv1(C1)
-        w = self.diff[0](v)
-        flow = self.warp[0](flow, w) + w   #1
-        return flow_0,  flow_1, flow_2, flow
-
-
-class bidirectional_average_net(nn.Module):
-    def __init__(self, inshape, flow_multiplier=1, channels=16):
-        super(bidirectional_average_net, self).__init__()
-        self.flow_multiplier = flow_multiplier
-        self.channels = channels
-        self.step = 7
-        self.inshape = inshape
-        c = self.channels  # c = 16
-        self.warp = nn.ModuleList()
-        self.diff = nn.ModuleList()
-        for i in range(4):
-            self.warp.append(SpatialTransformer([s // 2 ** i for s in inshape]))
-            self.diff.append(VecInt([s // 2 ** i for s in inshape]))
-        self.layers3 = sequential_pyramid_net((128,128))
-
-    def forward(self, moving, fixed):
-        flow_0,  flow_1, flow_2,flow_3= self.layers3(moving,fixed)
-        flow_0_INVERSE, flow_1_INVERSE, flow_2_INVERSE,flow_3_INVERSE = self.layers3(fixed,moving)
-        vecs_3 = (flow_3 - flow_3_INVERSE) / 2
-        flow_3 = VecInt((128, 128))(vecs_3)
-        y_moved = self.warp[0](moving, flow_3)
-        return y_moved, flow_0, flow_1,flow_2, flow_3
 
 
 if __name__ == '__main__':
     size = (2, 1, 128, 128)
-    model = bidirectional_average_net(size[2:])
+    model = sequential_pyramid_net(size[2:])
     A = torch.ones(size)
     B = torch.ones(size)
     C = torch.ones(size)
-    y_moved, flow_0, flow_1,flow_2,flow_3 = model(A, B)
-    print(y_moved.shape, flow_0.shape,flow_1.shape,flow_2.shape,flow_3.shape)
+    y_moved, flow_0_forward, flow_1_forward, flow_2_forward, flow_forward, x_moved, flow_0_backward, flow_1_backward, flow_2_backward, flow_backward = model(A, B)
+    # print(y_moved.shape, flow_0.shape,flow_1.shape,flow_2.shape,flow_3.shape)

@@ -107,7 +107,7 @@ def main():
 
 
     img_size = (128,128)
-    model = Registration_CEST_NeTwork.bidirectional_average_net(img_size,channels=16)
+    model = Registration_CEST_NeTwork.sequential_pyramid_net(img_size,channels=16)
     best_model = torch.load(model_dir + natsorted(os.listdir(model_dir))[model_idx], map_location='cuda:0')['state_dict']
     print('Best model: {}'.format(natsorted(os.listdir(model_dir))[model_idx]))
 
